@@ -1,4 +1,4 @@
-# PeerCheck – Peer Evaluation for IT Capstone Teams (Finals)
+# Peer to Apir Evaluation – Peer Evaluation for IT Capstone Teams (Finals)
 
 A responsive web app where capstone team members evaluate each other.
 **Students can only read the evaluations they wrote. They can never see what teammates wrote about them.** Only the team's adviser sees results.
@@ -31,7 +31,7 @@ Useful commands
 
 ## 2. Create the Firebase project (one time, free "Spark" plan)
 
-1. Go to <https://console.firebase.google.com> → **Add project** (name it e.g. `peercheck-capstone`).
+1. Go to <https://console.firebase.google.com> → **Add project** (name it e.g. `peer to apir evaluation-capstone`).
 2. **Build → Authentication → Get started → Sign-in method → Email/Password → Enable.**
 3. **Build → Firestore Database → Create database** → pick a location near you (e.g. `asia-southeast1`) → start in **production mode**.
 4. **Project settings (gear icon) → General → Your apps → Web (`</>`)** → register an app → copy the `firebaseConfig` values into your `.env`:
@@ -69,9 +69,9 @@ Demo logins: `adviser@sorsu.edu.ph / adviser123` and `juan@student.sorsu.edu.ph 
 ```bash
 git init
 git add .
-git commit -m "feat: initial PeerCheck React + Firebase project"
+git commit -m "feat: initial Peer to Apir Evaluation React + Firebase project"
 git branch -M main
-git remote add origin https://github.com/<your-group>/peercheck.git
+git remote add origin https://github.com/<your-group>/peerapireval.git
 git push -u origin main
 ```
 Every member should clone the repo, work on a branch (`git checkout -b feature/evaluate-form`), commit often with clear messages (`feat:`, `fix:`, `docs:`), and open pull requests. The CI workflow in `.github/workflows/ci.yml` runs type-check, tests and build on each push.
