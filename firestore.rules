@@ -1,0 +1,162 @@
+rules_version = '2';
+
+// =====================================================================
+// PeerCheck – Firestore Security Rules
+//
+// CORE PRIVACY RULE
+//   A student can read an evaluation ONLY if they wrote it (evaluatorId == their uid).
+//   There is no rule that lets the person being evaluated (evaluateeId) read it.
+//   Only the adviser who owns the team can read every evaluation of that team.
+//
+// COLLECTIONS
+//   users/{uid}                  one profile per Firebase Auth user
+//   teams/{TEAMCODE}             document id IS the team code (uppercase)
+//   evaluations/{evaluatorId_evaluateeId_term}
+//   adviserInvites/{email}       managed by the administrator in the Firebase console
+// =====================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() { return request.auth != null; }
+    function userDoc(uid) { return get(/databases/$(database)/documents/users/$(uid)); }
+    function me() { return userDoc(request.auth.uid).data; }
+    function isStudent() { return signedIn() && me().role == 'student'; }
+    function isAdviser() { return signedIn() && me().role == 'adviser'; }
+    function myTeam() { return me().teamId; }
+    function teamExists(code) { return exists(/databases/$(database)/documents/teams/$(code)); }
+    function isAdviserOf(teamId) {
+      return signedIn() && teamId is string &&
+        get(/databases/$(database)/documents/teams/$(teamId)).data.adviserId == request.auth.uid;
+    }
+    function terms() { return ['Midterm', 'Final']; }
+    function projectRoles() {
+      return ['Project Leader / System Analyst', 'Technical Writer', 'Frontend Developer',
+              'Backend Developer', 'UI/UX Designer', 'Member', 'Capstone Adviser'];
+    }
+    function validName(n) { return n is string && n.size() >= 3 && n.size() <= 100; }
+
+    // ---------- users ----------
+    match /users/{uid} {
+      // yourself, your teammates, or (for advisers) the students of their teams
+      allow read: if signedIn() && (
+        request.auth.uid == uid ||
+        (resource.data.teamId is string && resource.data.teamId == myTeam()) ||
+        isAdviserOf(resource.data.teamId)
+      );
+
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'email', 'role', 'studentId', 'teamId', 'projectRole', 'createdAt'])
+        && validName(request.resource.data.name)
+        && request.resource.data.email.lower() == request.auth.token.email.lower()
+        && request.resource.data.createdAt == request.time
+        && (
+          // students: must join an existing team
+          (request.resource.data.role == 'student'
+            && request.resource.data.projectRole == 'Member'
+            && request.resource.data.teamId is string
+            && teamExists(request.resource.data.teamId))
+          ||
+          // advisers: only emails pre-approved in adviserInvites
+          (request.resource.data.role == 'adviser'
+            && request.resource.data.teamId == null
+            && exists(/databases/$(database)/documents/adviserInvites/$(request.auth.token.email.lower())))
+        );
+
+      allow update: if signedIn() && (
+        // own profile: name + projectRole; teamId only when currently without a team
+        (request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'projectRole', 'teamId'])
+          && validName(request.resource.data.name)
+          && request.resource.data.projectRole in projectRoles()
+          && (request.resource.data.teamId == resource.data.teamId
+              || (resource.data.teamId == null && resource.data.role == 'student'
+                  && request.resource.data.teamId is string && teamExists(request.resource.data.teamId))))
+        ||
+        // adviser: may only remove (null) the team of a student in their own team
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teamId'])
+          && request.resource.data.teamId == null
+          && isAdviserOf(resource.data.teamId))
+      );
+
+      allow delete: if false;
+    }
+
+    // ---------- teams ----------
+    match /teams/{code} {
+      // anyone signed in can look a team up by its code (needed to join); listing is adviser-only
+      allow get: if signedIn();
+      allow list: if isAdviser() && resource.data.adviserId == request.auth.uid;
+
+      allow create: if isAdviser()
+        && request.resource.data.keys().hasOnly(['name', 'project', 'code', 'adviserId', 'createdAt'])
+        && request.resource.data.adviserId == request.auth.uid
+        && request.resource.data.code == code
+        && code.matches('^[A-Z0-9-]{4,20}$')
+        && request.resource.data.name is string && request.resource.data.name.size() >= 3
+        && request.resource.data.project is string && request.resource.data.project.size() >= 5
+        && request.resource.data.createdAt == request.time;
+
+      allow update: if isAdviser() && resource.data.adviserId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'project'])
+        && request.resource.data.name is string && request.resource.data.name.size() >= 3
+        && request.resource.data.project is string && request.resource.data.project.size() >= 5;
+
+      allow delete: if isAdviser() && resource.data.adviserId == request.auth.uid;
+    }
+
+    // ---------- evaluations ----------
+    match /evaluations/{id} {
+      function validRatings(r) {
+        return r is map
+          && r.keys().hasOnly(['contribution', 'quality', 'communication', 'teamwork', 'reliability', 'initiative'])
+          && r.keys().hasAll(['contribution', 'quality', 'communication', 'teamwork', 'reliability', 'initiative'])
+          && r.contribution is int && r.contribution >= 1 && r.contribution <= 5
+          && r.quality is int && r.quality >= 1 && r.quality <= 5
+          && r.communication is int && r.communication >= 1 && r.communication <= 5
+          && r.teamwork is int && r.teamwork >= 1 && r.teamwork <= 5
+          && r.reliability is int && r.reliability >= 1 && r.reliability <= 5
+          && r.initiative is int && r.initiative >= 1 && r.initiative <= 5;
+      }
+      function validComment(c) { return c is string && c.size() >= 20 && c.size() <= 500; }
+
+      // PRIVACY: the author or the team's adviser – never the person being evaluated
+      allow read: if signedIn() && (
+        resource.data.evaluatorId == request.auth.uid ||
+        isAdviserOf(resource.data.teamId)
+      );
+
+      allow create: if isStudent()
+        && request.resource.data.keys().hasOnly(['teamId', 'term', 'evaluatorId', 'evaluateeId', 'ratings', 'strengths', 'improvements', 'createdAt', 'updatedAt'])
+        && request.resource.data.evaluatorId == request.auth.uid
+        && request.resource.data.evaluateeId != request.auth.uid
+        && id == request.auth.uid + '_' + request.resource.data.evaluateeId + '_' + request.resource.data.term
+        && request.resource.data.term in terms()
+        && request.resource.data.teamId == myTeam()
+        && userDoc(request.resource.data.evaluateeId).data.teamId == myTeam()
+        && userDoc(request.resource.data.evaluateeId).data.role == 'student'
+        && validRatings(request.resource.data.ratings)
+        && validComment(request.resource.data.strengths)
+        && validComment(request.resource.data.improvements)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      allow update: if signedIn() && resource.data.evaluatorId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ratings', 'strengths', 'improvements', 'updatedAt'])
+        && validRatings(request.resource.data.ratings)
+        && validComment(request.resource.data.strengths)
+        && validComment(request.resource.data.improvements)
+        && request.resource.data.updatedAt == request.time;
+
+      allow delete: if signedIn() && (
+        resource.data.evaluatorId == request.auth.uid ||
+        isAdviserOf(resource.data.teamId)
+      );
+    }
+
+    // ---------- adviser invites (administrator only, via Firebase console) ----------
+    match /adviserInvites/{email} {
+      allow read, write: if false;
+    }
+  }
+}
